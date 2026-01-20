@@ -1,0 +1,372 @@
+"""
+FastAPI backend for ML-powered disaster image analysis.
+"""
+
+import os
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional
+from dotenv import load_dotenv
+from supabase import create_client, Client
+
+from app.image_analyzer import analyzer
+from app.disaster_classifier import analyze_text, extract_entities
+from app.ocr_pipeline import extract_text_from_url
+from app.geo.geo_pipeline import resolve_location_async
+from app.geo.extractor import extract_locations
+
+load_dotenv()
+
+app = FastAPI(
+    title="RescueConnect ML Backend",
+    description="ML-powered disaster image analysis API",
+    version="1.0.0"
+)
+
+# CORS for React frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Supabase client
+supabase: Client = create_client(
+    os.getenv("SUPABASE_URL", ""),
+    os.getenv("SUPABASE_SERVICE_KEY", "")
+)
+
+
+class AnalyzeRequest(BaseModel):
+    image_url: str
+    post_id: Optional[str] = None
+
+
+class AnalyzeResponse(BaseModel):
+    is_disaster: bool
+    disaster_type: str
+    severity: str
+    description: str
+    detected_elements: list
+    location_hints: str
+    people_affected: str
+    urgency_score: int
+
+
+class ProcessPostRequest(BaseModel):
+    post_id: str
+
+
+class UpdateStatusRequest(BaseModel):
+    post_id: str
+    status: str
+
+
+class ResetAIRequest(BaseModel):
+    post_id: str
+
+
+@app.get("/")
+async def root():
+    return {"message": "RescueConnect ML Backend is running", "status": "healthy"}
+
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy", "openai_configured": bool(analyzer.openai_key)}
+
+
+@app.post("/analyze", response_model=AnalyzeResponse)
+async def analyze_image(request: AnalyzeRequest):
+    """
+    Analyze a single image and return disaster information.
+    Does NOT update the database.
+    """
+    if not request.image_url:
+        raise HTTPException(status_code=400, detail="image_url is required")
+    
+    result = await analyzer.analyze_image(request.image_url)
+    return AnalyzeResponse(**result)
+
+
+@app.post("/process-post")
+async def process_post(request: ProcessPostRequest):
+    """
+    Process a post by ID:
+    1. Fetch post from database
+    2. Analyze the image
+    3. Update the post with analysis results
+    """
+    try:
+        # Fetch the post
+        response = supabase.table("posts").select("*").eq("id", request.post_id).single().execute()
+        post = response.data
+        
+        if not post:
+            raise HTTPException(status_code=404, detail="Post not found")
+        
+        if not post.get("image_url"):
+            raise HTTPException(status_code=400, detail="Post has no image")
+        
+        # Analyze the image
+        analysis = await analyzer.analyze_image(post["image_url"])
+        
+        # Determine new status based on analysis
+        new_status = "pending"
+        if analysis["is_disaster"]:
+            if analysis["urgency_score"] >= 7:
+                new_status = "urgent"
+            else:
+                new_status = "verified"
+        else:
+            new_status = "rejected"  # Not a disaster image
+        
+        # Update the post with analysis results
+        update_data = {
+            "status": new_status,
+            "disaster_type": analysis["disaster_type"],
+            "severity": analysis["severity"],
+            "ai_description": analysis["description"],
+            "detected_elements": analysis["detected_elements"],
+            "location_hints": analysis["location_hints"],
+            "people_affected": analysis["people_affected"],
+            "urgency_score": analysis["urgency_score"],
+            "is_disaster": analysis["is_disaster"],
+            "ai_processed": True
+        }
+        
+        supabase.table("posts").update(update_data).eq("id", request.post_id).execute()
+        
+        return {
+            "success": True,
+            "post_id": request.post_id,
+            "new_status": new_status,
+            "analysis": analysis
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/process-full")
+async def process_full_pipeline(request: ProcessPostRequest):
+    """
+    Full pipeline processing:
+    1. Fetch post from DB
+    2. Analyze image with Gemini (existing)
+    3. Run OCR on image to extract text
+    4. Run disaster_classifier on caption + OCR text
+    5. Run geo_pipeline to infer location
+    6. Update post with all results
+    """
+    try:
+        # Fetch the post
+        response = supabase.table("posts").select("*").eq("id", request.post_id).single().execute()
+        post = response.data
+        
+        if not post:
+            raise HTTPException(status_code=404, detail="Post not found")
+        
+        if not post.get("image_url"):
+            raise HTTPException(status_code=400, detail="Post has no image")
+        
+        # Step 1: Analyze image with existing Gemini analyzer
+        image_analysis = await analyzer.analyze_image(post["image_url"])
+        
+        # Step 2: Run OCR on image
+        ocr_result = await extract_text_from_url(post["image_url"])
+        ocr_text = ocr_result.get("extracted_text", "")
+        
+        # Step 3: Run text analysis on caption + OCR text
+        caption = post.get("caption", "")
+        text_analysis = analyze_text(caption, ocr_text)
+        
+        # Step 4: Run geolocation pipeline
+        extracted_locations = text_analysis.get("entities", {}).get("locations", [])
+        geo_result = await resolve_location_async(
+            caption=caption,
+            ocr_text=ocr_text,
+            image_url=post["image_url"],
+            extracted_locations=extracted_locations
+        )
+        
+        # Determine status based on analysis
+        new_status = "pending"
+        if image_analysis["is_disaster"]:
+            # Combine urgency from image and text analysis
+            combined_urgency = max(
+                image_analysis["urgency_score"],
+                int(text_analysis.get("urgency_score", 0) * 10)
+            )
+            if combined_urgency >= 7:
+                new_status = "urgent"
+            else:
+                new_status = "verified"
+        else:
+            new_status = "rejected"
+        
+        # Prepare update data with all results
+        update_data = {
+            # Existing fields
+            "status": new_status,
+            "disaster_type": image_analysis["disaster_type"],
+            "severity": image_analysis["severity"],
+            "ai_description": image_analysis["description"],
+            "detected_elements": image_analysis["detected_elements"],
+            "location_hints": image_analysis["location_hints"],
+            "people_affected": image_analysis["people_affected"],
+            "urgency_score": image_analysis["urgency_score"],
+            "is_disaster": image_analysis["is_disaster"],
+            "ai_processed": True,
+            # New OCR fields
+            "ocr_text": ocr_text if ocr_text else None,
+            # New text analysis fields
+            "text_labels": text_analysis.get("text_labels", []),
+            "extracted_locations": extracted_locations,
+            # New geolocation fields
+            "inferred_latitude": geo_result.get("latitude"),
+            "inferred_longitude": geo_result.get("longitude"),
+            "location_confidence": geo_result.get("confidence"),
+            "location_method": geo_result.get("method"),
+            "scene_type": geo_result.get("scene_analysis", {}).get("scene_type") if geo_result.get("scene_analysis") else None
+        }
+        
+        # Update the post
+        supabase.table("posts").update(update_data).eq("id", request.post_id).execute()
+        
+        return {
+            "success": True,
+            "post_id": request.post_id,
+            "new_status": new_status,
+            "image_analysis": image_analysis,
+            "ocr_result": {
+                "extracted_text": ocr_text,
+                "num_regions": ocr_result.get("num_regions", 0)
+            },
+            "text_analysis": text_analysis,
+            "geo_result": geo_result
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/update-status")
+async def update_status(request: UpdateStatusRequest):
+    """
+    Update a post's status. Uses service key to bypass RLS.
+    """
+    try:
+        valid_statuses = ["pending", "verified", "rejected", "urgent"]
+        if request.status not in valid_statuses:
+            raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid_statuses}")
+        
+        supabase.table("posts").update({"status": request.status}).eq("id", request.post_id).execute()
+        
+        return {
+            "success": True,
+            "post_id": request.post_id,
+            "new_status": request.status
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/reset-ai")
+async def reset_ai(request: ResetAIRequest):
+    """
+    Reset AI processing for a post so it can be reanalyzed.
+    """
+    try:
+        supabase.table("posts").update({
+            "ai_processed": False,
+            "disaster_type": None,
+            "severity": None,
+            "ai_description": None,
+            "detected_elements": None,
+            "location_hints": None,
+            "people_affected": None,
+            "urgency_score": 0,
+            "is_disaster": None
+        }).eq("id", request.post_id).execute()
+        
+        return {
+            "success": True,
+            "post_id": request.post_id
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/process-all-pending")
+async def process_all_pending():
+    """
+    Process all pending posts that haven't been analyzed yet.
+    """
+    try:
+        # Fetch pending posts
+        response = supabase.table("posts").select("*").eq("status", "pending").execute()
+        posts = response.data or []
+        
+        results = []
+        for post in posts:
+            if not post.get("image_url"):
+                continue
+                
+            try:
+                # Analyze
+                analysis = await analyzer.analyze_image(post["image_url"])
+                
+                # Determine status
+                new_status = "pending"
+                if analysis["is_disaster"]:
+                    new_status = "urgent" if analysis["urgency_score"] >= 7 else "verified"
+                else:
+                    new_status = "rejected"
+                
+                # Update
+                update_data = {
+                    "status": new_status,
+                    "disaster_type": analysis["disaster_type"],
+                    "severity": analysis["severity"],
+                    "ai_description": analysis["description"],
+                    "detected_elements": analysis["detected_elements"],
+                    "location_hints": analysis["location_hints"],
+                    "people_affected": analysis["people_affected"],
+                    "urgency_score": analysis["urgency_score"],
+                    "is_disaster": analysis["is_disaster"],
+                    "ai_processed": True
+                }
+                
+                supabase.table("posts").update(update_data).eq("id", post["id"]).execute()
+                
+                results.append({
+                    "post_id": post["id"],
+                    "status": "processed",
+                    "new_status": new_status
+                })
+                
+            except Exception as e:
+                results.append({
+                    "post_id": post["id"],
+                    "status": "failed",
+                    "error": str(e)
+                })
+        
+        return {
+            "total_processed": len(results),
+            "results": results
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

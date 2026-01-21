@@ -554,6 +554,122 @@ async def compute_all_hashes():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class NotificationRequest(BaseModel):
+    post_id: str
+    user_id: str
+    status: str
+    team_name: str = "Rescue Team"
+    disaster_type: str = "Emergency"
+    location: str = "your reported location"
+
+
+@app.post("/send-notification")
+async def send_notification(request: NotificationRequest):
+    """
+    Send email notification to user about dispatch status update.
+    Uses Supabase to fetch user email and sends via Resend API.
+    """
+    import resend
+    
+    try:
+        # Get user email from auth.users via Supabase Admin API
+        # First get user profile to get display name
+        profile_response = supabase.table("profiles")\
+            .select("username, display_name")\
+            .eq("id", request.user_id)\
+            .single()\
+            .execute()
+        
+        profile = profile_response.data or {}
+        user_name = profile.get("display_name") or profile.get("username") or "User"
+        
+        # Get user email using Supabase Admin API
+        user_email = None
+        try:
+            # Use Supabase admin client to get user email
+            user_response = supabase.auth.admin.get_user_by_id(request.user_id)
+            if user_response and user_response.user:
+                user_email = user_response.user.email
+        except Exception as e:
+            print(f"Could not get user email: {e}")
+        
+        # Prepare email content
+        status_messages = {
+            "assigned": f"Good news! A rescue team ({request.team_name}) has been assigned to your emergency report.",
+            "in-progress": f"Update: {request.team_name} is now actively responding to your emergency report.",
+            "resolved": "Great news! Your reported emergency has been resolved. Thank you for helping your community stay safe."
+        }
+        
+        message_body = f"""
+Dear {user_name},
+
+{status_messages.get(request.status, f"Your emergency report status has been updated to: {request.status}")}
+
+📍 Location: {request.location}
+🚨 Disaster Type: {request.disaster_type}
+👥 Assigned Team: {request.team_name}
+📊 Status: {request.status.replace('-', ' ').title()}
+
+{"Our rescue team is on the way and will reach you as quickly as possible. Please stay safe and follow any local emergency guidelines." if request.status != "resolved" else ""}
+
+If you need immediate assistance, please call your local emergency services.
+
+Stay safe,
+RescueConnect Emergency Response Team
+
+---
+This is an automated notification from RescueConnect.
+"""
+        
+        # Try to send email via Resend if configured
+        resend_api_key = os.getenv("RESEND_API_KEY")
+        
+        email_sent = False
+        
+        print(f"📧 Sending notification: user_email={user_email}, api_key_set={bool(resend_api_key)}")
+        
+        if resend_api_key and user_email:
+            try:
+                resend.api_key = resend_api_key
+                
+                # Must use onboarding@resend.dev for free tier (no domain verification)
+                r = resend.Emails.send({
+                    "from": "RescueConnect <onboarding@resend.dev>",
+                    "to": [user_email],
+                    "subject": f"🚨 RescueConnect: Rescue Team {request.status.replace('-', ' ').title()} for Your Report",
+                    "text": message_body
+                })
+                
+                email_sent = True
+                print(f"✅ Email sent to {user_email} via Resend: {r}")
+            except Exception as e:
+                print(f"❌ Failed to send email via Resend: {e}")
+        else:
+            # Log the notification if email not configured
+            print(f"📧 Notification (Resend API key not configured):")
+            print(f"   To: {user_name} ({user_email or 'no email'})")
+            print(f"   Status: {request.status}")
+            print(f"   Team: {request.team_name}")
+        
+        return {
+            "success": True,
+            "user_name": user_name,
+            "user_email": user_email,
+            "email_sent": email_sent,
+            "status": request.status,
+            "message": f"Notification {'sent' if email_sent else 'logged'} for {user_name}"
+        }
+        
+    except Exception as e:
+        print(f"Error sending notification: {e}")
+        # Return success anyway to not block the dispatch update
+        return {
+            "success": True,
+            "email_sent": False,
+            "error": str(e)
+        }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

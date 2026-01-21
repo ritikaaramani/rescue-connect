@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../supabaseClient'
-import { RefreshCw, MapPin, Clock, User, CheckCircle, XCircle, Zap, Brain, AlertTriangle, Copy, X } from 'lucide-react'
+import { RefreshCw, MapPin, Clock, User, CheckCircle, XCircle, Zap, Brain, AlertTriangle, Copy, X, Navigation } from 'lucide-react'
 import mlApi from '../lib/mlApi'
 
 // Major Indian cities
@@ -39,7 +39,7 @@ const LANDMARKS_TO_CITY = {
   'lal bagh': 'Bangalore'
 }
 
-export default function PostsTable() {
+export default function PostsTable({ onViewOnMap }) {
   const [posts, setPosts] = useState([])
   const [allPosts, setAllPosts] = useState([]) // Store all posts for client-side filtering
   const [loading, setLoading] = useState(false)
@@ -53,6 +53,7 @@ export default function PostsTable() {
   const [citySuggestions, setCitySuggestions] = useState([])
   const [selectedCity, setSelectedCity] = useState('')
   const [locationCache, setLocationCache] = useState({}) // Cache for AI location lookups
+  const [profiles, setProfiles] = useState({}) // Cache for user profiles
 
   // Smart location check using AI - checks if a location belongs to a city
   const checkLocationBelongsToCity = async (location, city) => {
@@ -159,6 +160,19 @@ export default function PostsTable() {
       if (error) throw error
       const postsData = data ?? []
       setAllPosts(postsData)
+      
+      // Fetch profiles for all unique user_ids
+      const userIds = [...new Set(postsData.map(p => p.user_id).filter(Boolean))]
+      if (userIds.length > 0) {
+        const { data: profilesData } = await supabase
+          .from('profiles')
+          .select('id, username, display_name, avatar_url')
+          .in('id', userIds)
+        
+        const profilesMap = {}
+        profilesData?.forEach(p => { profilesMap[p.id] = p })
+        setProfiles(profilesMap)
+      }
       
       // Apply all filters to the fetched data
       if (selectedCity || startDate || endDate) {
@@ -716,7 +730,10 @@ export default function PostsTable() {
 
               <div className="mt-2 text-xs text-gray-500 flex items-center gap-1">
                 <User className="w-3 h-3" />
-                {post.user_id ?? 'Anonymous'}
+                {profiles[post.user_id]?.display_name || profiles[post.user_id]?.username || 'Anonymous'}
+                {profiles[post.user_id]?.username && (
+                  <span className="text-gray-400">@{profiles[post.user_id].username}</span>
+                )}
               </div>
 
               {/* Actions */}
@@ -849,6 +866,16 @@ export default function PostsTable() {
                     className="px-3 py-1 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300"
                   >
                     Reset to Pending
+                  </button>
+                )}
+                {/* View on Map button - only show if post has coordinates */}
+                {post.inferred_latitude && post.inferred_longitude && onViewOnMap && (
+                  <button
+                    onClick={() => onViewOnMap(post)}
+                    className="px-3 py-1 bg-blue-600 text-white rounded text-sm flex items-center gap-1 hover:bg-blue-700"
+                  >
+                    <Navigation className="w-4 h-4" />
+                    View on Map
                   </button>
                 )}
               </div>

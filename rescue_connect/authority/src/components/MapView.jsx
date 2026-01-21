@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet'
+import { MapContainer, TileLayer, Marker, Popup, useMap, Tooltip } from 'react-leaflet'
 import MarkerClusterGroup from 'react-leaflet-cluster'
 import { supabase } from '../supabaseClient'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+import { Truck } from 'lucide-react'
 
 // Fix for default marker icons in React-Leaflet
 delete L.Icon.Default.prototype._getIconUrl
@@ -44,7 +45,65 @@ function FitBounds({ posts }) {
   return null
 }
 
-export default function MapView() {
+// Component to center map on a specific post
+function CenterOnPost({ post }) {
+  const map = useMap()
+
+  useEffect(() => {
+    if (post && post.inferred_latitude && post.inferred_longitude) {
+      map.setView([post.inferred_latitude, post.inferred_longitude], 15)
+    }
+  }, [post, map])
+
+  return null
+}
+
+// Extract needs/requirements from caption AND AI analysis
+function extractNeeds(post) {
+  const needs = []
+  const caption = (post.caption || '').toLowerCase()
+  const aiDesc = (post.ai_description || '').toLowerCase()
+  const detected = (post.detected_elements || []).map(e => e.toLowerCase())
+  const combined = caption + ' ' + aiDesc + ' ' + detected.join(' ')
+  
+  // Food needs
+  if (combined.includes('food required') || combined.includes('food needed') || combined.includes('need food') || combined.includes('hungry')) {
+    needs.push('🍲 Food Required')
+  }
+  // Water needs
+  if (combined.includes('water required') || combined.includes('water needed') || combined.includes('need water') || combined.includes('drinking water')) {
+    needs.push('💧 Water Required')
+  }
+  // Medical help
+  if (combined.includes('medical') || combined.includes('medicine') || combined.includes('doctor') || combined.includes('injured') || combined.includes('injury')) {
+    needs.push('🏥 Medical Help')
+  }
+  // Rescue needed - from AI detection
+  if (combined.includes('rescue') || combined.includes('trapped') || combined.includes('stuck') || 
+      combined.includes('people wading') || combined.includes('stranded') || combined.includes('marooned')) {
+    needs.push('🆘 Rescue Needed')
+  }
+  // Shelter
+  if (combined.includes('shelter') || combined.includes('housing') || combined.includes('homeless')) {
+    needs.push('🏠 Shelter Needed')
+  }
+  // Power outage
+  if (combined.includes('electricity') || combined.includes('power') || combined.includes('blackout')) {
+    needs.push('⚡ Power Outage')
+  }
+  // Vehicles submerged - transportation issue
+  if (combined.includes('submerged') || combined.includes('vehicles') && combined.includes('water')) {
+    needs.push('🚗 Vehicles Affected')
+  }
+  // People in danger
+  if (detected.includes('people wading') || detected.includes('people') && combined.includes('flood')) {
+    needs.push('👥 People in Danger')
+  }
+  
+  return needs.length > 0 ? needs : null
+}
+
+export default function MapView({ selectedPost, onClearSelection, onDispatchTeam }) {
   const [posts, setPosts] = useState([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('all')
@@ -106,6 +165,43 @@ export default function MapView() {
 
   return (
     <div className="flex flex-col h-full">
+      {/* Selected Post Action Banner */}
+      {selectedPost && (
+        <div className="mb-4 p-4 bg-gradient-to-r from-blue-600/30 to-orange-600/30 border border-blue-500 rounded-lg">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
+              <div>
+                <p className="text-white font-semibold text-lg">
+                  📍 {selectedPost.disaster_type || 'Disaster'} - {selectedPost.extracted_locations?.[0] || 'Location'}
+                </p>
+                <p className="text-gray-300 text-sm">
+                  Coordinates: ({selectedPost.inferred_latitude?.toFixed(4)}, {selectedPost.inferred_longitude?.toFixed(4)})
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {/* Dispatch Team Button */}
+              {(selectedPost.status === 'urgent' || selectedPost.status === 'verified') && onDispatchTeam && (
+                <button
+                  onClick={() => onDispatchTeam(selectedPost)}
+                  className="px-4 py-2 bg-orange-600 text-white rounded-lg flex items-center gap-2 hover:bg-orange-700 font-medium"
+                >
+                  <Truck className="w-5 h-5" />
+                  Dispatch Team
+                </button>
+              )}
+              <button
+                onClick={onClearSelection}
+                className="text-gray-300 hover:text-white text-sm px-3 py-2 bg-gray-700 rounded-lg hover:bg-gray-600"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header with filters */}
       <div className="mb-4 flex items-center justify-between">
         <div>
@@ -140,8 +236,8 @@ export default function MapView() {
       {/* Map container */}
       <div className="flex-1 rounded-xl overflow-hidden border border-gray-700" style={{ minHeight: '500px' }}>
         <MapContainer
-          center={defaultCenter}
-          zoom={defaultZoom}
+          center={selectedPost ? [selectedPost.inferred_latitude, selectedPost.inferred_longitude] : defaultCenter}
+          zoom={selectedPost ? 15 : defaultZoom}
           style={{ height: '100%', width: '100%' }}
         >
           <TileLayer
@@ -149,17 +245,48 @@ export default function MapView() {
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
 
-          {posts.length > 0 && <FitBounds posts={posts} />}
+          {/* Center on selected post if present */}
+          {selectedPost && <CenterOnPost post={selectedPost} />}
+          
+          {/* Fit bounds only if no selected post */}
+          {!selectedPost && posts.length > 0 && <FitBounds posts={posts} />}
 
           <MarkerClusterGroup chunkedLoading>
-            {posts.map(post => (
+            {posts.map(post => {
+              const needs = extractNeeds(post)
+              const isSelected = selectedPost && selectedPost.id === post.id
+              
+              return (
               <Marker
                 key={post.id}
                 position={[post.inferred_latitude, post.inferred_longitude]}
                 icon={getIcon(post.status)}
               >
+                {/* Permanent tooltip above marker showing needs */}
+                {needs && (
+                  <Tooltip 
+                    permanent={isSelected} 
+                    direction="top" 
+                    offset={[0, -35]}
+                    className="needs-tooltip"
+                  >
+                    <div className="text-xs font-medium text-center">
+                      {needs.slice(0, 3).join(' • ')}
+                    </div>
+                  </Tooltip>
+                )}
                 <Popup>
                   <div className="max-w-xs">
+                    {/* Needs/Requirements Label */}
+                    {needs && (
+                      <div className="mb-2 p-2 bg-yellow-100 rounded-lg border border-yellow-300">
+                        <p className="font-bold text-yellow-800 text-xs">⚠️ Detected Needs:</p>
+                        {needs.map((need, i) => (
+                          <span key={i} className="inline-block text-xs bg-yellow-200 text-yellow-800 px-2 py-0.5 rounded mr-1 mt-1">{need}</span>
+                        ))}
+                      </div>
+                    )}
+                    
                     {/* Image */}
                     {post.image_url && (
                       <img
@@ -219,7 +346,8 @@ export default function MapView() {
                   </div>
                 </Popup>
               </Marker>
-            ))}
+              )
+            })}
           </MarkerClusterGroup>
         </MapContainer>
       </div>

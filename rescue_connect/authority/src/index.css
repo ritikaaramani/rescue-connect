@@ -11,30 +11,33 @@ body {
 }
 
 .sidebar {
-  background-color: #111827;
+  background: linear-gradient(180deg, #0f172a 0%, #1e1b4b 100%);
   color: white;
   min-height: 100vh;
   width: 16rem;
   padding: 1rem;
+  border-right: 1px solid rgba(59, 130, 246, 0.2);
 }
 
 .main-content {
   flex: 1;
   padding: 1.5rem;
+  background-color: #f3f4f6;
 }
 
 .card {
   background-color: white;
-  border-radius: 0.5rem;
+  border-radius: 0.75rem;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  padding: 1rem;
+  padding: 1.25rem;
+  border: 1px solid #e5e7eb;
 }
 
 .badge {
-  padding: 0.25rem 0.5rem;
-  border-radius: 0.25rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
   font-size: 0.75rem;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .badge-pending {
@@ -53,10 +56,10 @@ body {
 }
 
 .btn {
-  padding: 0.5rem 1rem;
-  border-radius: 0.25rem;
-  font-weight: 500;
-  transition: background-color 0.2s;
+  padding: 0.5rem 1.25rem;
+  border-radius: 0.5rem;
+  font-weight: 600;
+  transition: all 0.2s;
 }
 
 .btn-primary {
@@ -81,4 +84,24 @@ body {
 }
 .btn-success:hover {
   background-color: #15803d;
+}
+
+/* Custom tooltip for map markers */
+.needs-tooltip {
+  background-color: #fef3c7 !important;
+  border: 2px solid #f59e0b !important;
+  border-radius: 8px !important;
+  padding: 4px 8px !important;
+  font-weight: 600 !important;
+  color: #92400e !important;
+  white-space: nowrap !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2) !important;
+}
+
+.needs-tooltip::before {
+  border-top-color: #f59e0b !important;
+}
+
+.leaflet-tooltip-top.needs-tooltip::before {
+  border-top-color: #f59e0b !important;
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../supabaseClient'
-import { Truck, Save, MapPin, X, AlertTriangle } from 'lucide-react'
+import { Truck, Save, MapPin, X, AlertTriangle, Mail, CheckCircle } from 'lucide-react'
 import mlApi from '../lib/mlApi'
 
 // Valid status transitions (matching backend)
@@ -18,16 +18,42 @@ const STATUS_COLORS = {
     resolved: 'bg-green-100 text-green-800'
 }
 
-export default function DispatchView() {
+export default function DispatchView({ selectedPost, onClearSelection }) {
     const [posts, setPosts] = useState([])
     const [loading, setLoading] = useState(false)
     const [edits, setEdits] = useState({})
     const [resolveModal, setResolveModal] = useState(null) // Post being resolved
     const [resolutionNotes, setResolutionNotes] = useState('')
+    const [highlightedPostId, setHighlightedPostId] = useState(null)
+    const [notificationModal, setNotificationModal] = useState(null) // For showing notification sent confirmation
+    const [sendingEmail, setSendingEmail] = useState(false)
+    const [profiles, setProfiles] = useState({}) // Cache for user profiles
 
     useEffect(() => {
         fetchDispatchablePosts()
     }, [])
+
+    // Handle selected post from navigation - auto set to in-progress
+    useEffect(() => {
+        if (selectedPost && posts.length > 0) {
+            const postInList = posts.find(p => p.id === selectedPost.id)
+            if (postInList) {
+                setHighlightedPostId(selectedPost.id)
+                // Auto-set to in-progress if currently pending
+                const currentStatus = postInList.dispatch_status || 'pending'
+                if (currentStatus === 'pending') {
+                    handleEditChange(selectedPost.id, 'dispatch_status', 'assigned')
+                }
+                // Scroll to the post
+                setTimeout(() => {
+                    const element = document.getElementById(`dispatch-row-${selectedPost.id}`)
+                    if (element) {
+                        element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                    }
+                }, 100)
+            }
+        }
+    }, [selectedPost, posts])
 
     async function fetchDispatchablePosts() {
         setLoading(true)
@@ -41,7 +67,21 @@ export default function DispatchView() {
                 .order('created_at', { ascending: false })
 
             if (error) throw error
-            setPosts(data || [])
+            const postsData = data || []
+            setPosts(postsData)
+            
+            // Fetch profiles for all unique user_ids
+            const userIds = [...new Set(postsData.map(p => p.user_id).filter(Boolean))]
+            if (userIds.length > 0) {
+                const { data: profilesData } = await supabase
+                    .from('profiles')
+                    .select('id, username, display_name, avatar_url')
+                    .in('id', userIds)
+                
+                const profilesMap = {}
+                profilesData?.forEach(p => { profilesMap[p.id] = p })
+                setProfiles(profilesMap)
+            }
         } catch (err) {
             console.error('Error fetching dispatch posts:', err)
         }
@@ -76,11 +116,56 @@ export default function DispatchView() {
 
         try {
             await mlApi.updateDispatch(post.id, newStatus, newTeam)
+            
+            // Send email notification to user
+            await sendNotificationEmail(post, newStatus, newTeam)
+            
             setEdits(prev => { const n = { ...prev }; delete n[post.id]; return n })
             fetchDispatchablePosts()
         } catch (err) {
             alert('Error: ' + err.message)
         }
+    }
+
+    // Send notification email to user
+    const sendNotificationEmail = async (post, status, team) => {
+        setSendingEmail(true)
+        try {
+            // Get user name from profiles map
+            const userName = profiles[post.user_id]?.display_name || profiles[post.user_id]?.username || 'User'
+            
+            // Call backend to send email
+            const response = await fetch(`${import.meta.env.VITE_ML_BACKEND_URL || 'http://localhost:8000'}/send-notification`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    post_id: post.id,
+                    user_id: post.user_id,
+                    status: status,
+                    team_name: team || 'Rescue Team',
+                    disaster_type: post.disaster_type || 'Emergency',
+                    location: post.extracted_locations?.[0] || post.location || 'your reported location'
+                })
+            })
+            
+            if (response.ok) {
+                setNotificationModal({
+                    userName: userName,
+                    status: status,
+                    team: team
+                })
+            }
+        } catch (err) {
+            console.error('Failed to send notification:', err)
+            // Still show confirmation even if email fails
+            setNotificationModal({
+                userName: profiles[post.user_id]?.display_name || profiles[post.user_id]?.username || 'User',
+                status: status,
+                team: team,
+                emailFailed: true
+            })
+        }
+        setSendingEmail(false)
     }
 
     const confirmResolve = async () => {
@@ -111,6 +196,31 @@ export default function DispatchView() {
 
     return (
         <div className="p-6">
+            {/* Selected Post Banner */}
+            {selectedPost && (
+                <div className="mb-4 p-3 bg-orange-100 border border-orange-400 rounded-lg flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse"></div>
+                        <div>
+                            <p className="text-orange-800 font-medium">
+                                Dispatching: {selectedPost.disaster_type || 'Incident'} 
+                                {selectedPost.extracted_locations?.[0] && ` at ${selectedPost.extracted_locations[0]}`}
+                            </p>
+                            <p className="text-orange-600 text-sm">Status auto-set to "Assigned" - enter team name and save</p>
+                        </div>
+                    </div>
+                    <button
+                        onClick={() => {
+                            setHighlightedPostId(null)
+                            onClearSelection?.()
+                        }}
+                        className="text-orange-700 hover:text-orange-900 text-sm px-3 py-1 bg-orange-200 rounded hover:bg-orange-300"
+                    >
+                        Clear Selection
+                    </button>
+                </div>
+            )}
+
             <div className="flex items-center justify-between mb-6">
                 <div>
                     <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -150,15 +260,23 @@ export default function DispatchView() {
                                 const displayStatus = draft.dispatch_status || currentStatus
                                 const currentTeam = draft.assigned_team !== undefined ? draft.assigned_team : (post.assigned_team || '')
                                 const hasChanges = Object.keys(draft).length > 0
+                                const isHighlighted = highlightedPostId === post.id
 
                                 return (
-                                    <tr key={post.id} className="hover:bg-gray-50">
+                                    <tr 
+                                        key={post.id} 
+                                        id={`dispatch-row-${post.id}`}
+                                        className={`hover:bg-gray-50 ${isHighlighted ? 'bg-yellow-50 ring-2 ring-yellow-400' : ''}`}
+                                    >
                                         <td className="px-6 py-4">
                                             <div className="flex items-center">
                                                 {post.image_url && <img className="h-10 w-10 rounded object-cover mr-3" src={post.image_url} alt="" />}
                                                 <div>
                                                     <div className="text-sm font-medium text-gray-900 capitalize">{post.disaster_type || 'Unknown'}</div>
                                                     <div className="text-xs text-gray-500">{new Date(post.created_at).toLocaleDateString()}</div>
+                                                    <div className="text-xs text-blue-600">
+                                                        {post.profiles?.display_name || post.profiles?.username || 'Anonymous'}
+                                                    </div>
                                                 </div>
                                             </div>
                                         </td>
@@ -238,6 +356,50 @@ export default function DispatchView() {
                             <button onClick={() => setResolveModal(null)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
                             <button onClick={confirmResolve} className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">Confirm Resolution</button>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Notification Sent Modal */}
+            {notificationModal && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                    <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4 text-center">
+                        <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                            {notificationModal.emailFailed ? (
+                                <AlertTriangle className="w-8 h-8 text-yellow-600" />
+                            ) : (
+                                <Mail className="w-8 h-8 text-green-600" />
+                            )}
+                        </div>
+                        <h2 className="text-xl font-bold text-gray-800 mb-2">
+                            {notificationModal.emailFailed ? 'Dispatch Updated' : 'Notification Sent!'}
+                        </h2>
+                        <p className="text-gray-600 mb-4">
+                            {notificationModal.emailFailed ? (
+                                <>Dispatch status updated for <strong>{notificationModal.userName}</strong>. Email notification could not be sent.</>
+                            ) : (
+                                <>Email notification sent to <strong>{notificationModal.userName}</strong>!</>
+                            )}
+                        </p>
+                        <div className="bg-gray-50 rounded-lg p-4 text-left text-sm mb-4">
+                            <p className="text-gray-600">
+                                <strong>Status:</strong> {notificationModal.status?.replace('-', ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                            </p>
+                            {notificationModal.team && (
+                                <p className="text-gray-600">
+                                    <strong>Assigned Team:</strong> {notificationModal.team}
+                                </p>
+                            )}
+                            <p className="text-gray-500 text-xs mt-2 italic">
+                                "Rescue team is on its way and will reach you as quickly as possible. Stay safe!"
+                            </p>
+                        </div>
+                        <button 
+                            onClick={() => setNotificationModal(null)} 
+                            className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+                        >
+                            Done
+                        </button>
                     </div>
                 </div>
             )}

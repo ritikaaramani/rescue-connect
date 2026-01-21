@@ -100,6 +100,26 @@ export const mlApi = {
       throw new Error(err.detail || 'Reset AI failed')
     }
     return res.json()
+  },
+
+  /**
+   * Update dispatch status and assigned team
+   */
+  async updateDispatch(postId, dispatchStatus, assignedTeam) {
+    const res = await fetch(`${ML_BACKEND_URL}/update-dispatch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        post_id: postId,
+        dispatch_status: dispatchStatus,
+        assigned_team: assignedTeam
+      })
+    })
+    if (!res.ok) {
+      const err = await res.json()
+      throw new Error(err.detail || 'Update dispatch failed')
+    }
+    return res.json()
   }
 }
 

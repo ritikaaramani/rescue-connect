@@ -1,10 +1,12 @@
-import { LayoutDashboard, FileText, MapPin, Settings, LogOut } from 'lucide-react'
+import { LayoutDashboard, FileText, MapPin, Settings, LogOut, Radio, Flame } from 'lucide-react'
 
 export default function Sidebar({ currentPage, onNavigate, onLogout }) {
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'posts', label: 'All Reports', icon: FileText },
+    { id: 'dispatch', label: 'Dispatch', icon: Radio },
     { id: 'map', label: 'Map View', icon: MapPin },
+    { id: 'heatmap', label: 'Heatmap', icon: Flame },
     { id: 'settings', label: 'Settings', icon: Settings },
   ]
 
@@ -23,11 +25,10 @@ export default function Sidebar({ currentPage, onNavigate, onLogout }) {
             <button
               key={item.id}
               onClick={() => onNavigate(item.id)}
-              className={`w-full flex items-center gap-3 px-3 py-2 rounded text-left transition-colors ${
-                isActive
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded text-left transition-colors ${isActive
                   ? 'bg-blue-600 text-white'
                   : 'text-gray-300 hover:bg-gray-800'
-              }`}
+                }`}
             >
               <Icon className="w-5 h-5" />
               {item.label}

@@ -178,7 +178,11 @@ async def process_full_pipeline(request: ProcessPostRequest):
         
         # Step 2: Run OCR on image
         ocr_result = await extract_text_from_url(post["image_url"])
-        ocr_text = ocr_result.get("extracted_text", "")
+        pipeline_ocr_text = ocr_result.get("extracted_text", "")
+        
+        # Merge with AI visible text (fallback/enhancement)
+        ai_visible_text = image_analysis.get("visible_text", "")
+        ocr_text = f"{pipeline_ocr_text} {ai_visible_text}".strip()
         
         # Step 3: Run text analysis on caption + OCR text
         caption = post.get("caption", "")
@@ -186,11 +190,23 @@ async def process_full_pipeline(request: ProcessPostRequest):
         
         # Step 4: Run geolocation pipeline
         extracted_locations = text_analysis.get("entities", {}).get("locations", [])
+        
+        # Check for User Verified GPS (Ground Truth)
+        # If lat/lon exists and AI hasn't processed it yet, it's likely from the device/user
+        user_gps = None
+        if post.get("latitude") is not None and post.get("longitude") is not None:
+            # Only treat as Ground Truth if not previously AI generated 
+            # (or if we trust the input explicitly)
+            if not post.get("ai_processed", False):
+                user_gps = {"lat": post["latitude"], "lon": post["longitude"]}
+        
         geo_result = await resolve_location_async(
             caption=caption,
             ocr_text=ocr_text,
             image_url=post["image_url"],
-            extracted_locations=extracted_locations
+            extracted_locations=extracted_locations,
+            location_hints=image_analysis.get("location_hints", []),
+            gps=user_gps
         )
         
         # Determine status based on analysis
@@ -250,6 +266,27 @@ async def process_full_pipeline(request: ProcessPostRequest):
             "geo_result": geo_result
         }
         
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class DispatchUpdateRequest(BaseModel):
+    post_id: str
+    dispatch_status: str  # pending, dispatched, on_scene, resolved
+    assigned_team: Optional[str] = None
+
+
+@app.post("/update-dispatch")
+async def update_dispatch(request: DispatchUpdateRequest):
+    try:
+        data = {
+            "dispatch_status": request.dispatch_status
+        }
+        if request.assigned_team is not None:
+            data["assigned_team"] = request.assigned_team
+            
+        supabase.table("posts").update(data).eq("id", request.post_id).execute()
+        return {"success": True, "post_id": request.post_id, "new_status": request.dispatch_status}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

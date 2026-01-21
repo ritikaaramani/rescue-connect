@@ -4,6 +4,8 @@ import Sidebar from './components/Sidebar'
 import Dashboard from './components/Dashboard'
 import PostsTable from './components/PostsTable'
 import MapView from './components/MapView'
+import DispatchView from './components/DispatchView'
+import HeatmapView from './components/HeatmapView'
 import './index.css'
 
 export default function App() {
@@ -77,6 +79,10 @@ export default function App() {
         return <PostsTable />
       case 'map':
         return <MapView />
+      case 'dispatch':
+        return <DispatchView />
+      case 'heatmap':
+        return <HeatmapView />
       case 'settings':
         return (
           <div className="card">

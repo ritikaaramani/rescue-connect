@@ -94,9 +94,16 @@ def resolve_location(post: Dict[str, Any]) -> Dict[str, Any]:
             extracted = list(extracted_locations)
         else:
             extracted = extract_locations(caption, ocr_text)
+            
+        # Add provided location hints (from image analysis)
+        location_hints = post.get("location_hints", [])
+        if location_hints:
+            for hint in location_hints:
+                if hint and hint not in extracted:
+                    extracted.append(hint)
         
         if extracted:
-            # Add scene-based location hints
+            # Add scene-based location hints (if local analysis run)
             if scene_result and scene_result.get("location_hints"):
                 hints = scene_result["location_hints"]
                 for loc in extracted[:]:
@@ -105,8 +112,30 @@ def resolve_location(post: Dict[str, Any]) -> Dict[str, Any]:
                         if enhanced not in extracted:
                             extracted.append(enhanced)
             
+            # Sort extracted locations by length (descending) to prioritize specific names
+            # e.g. "Kempegowda International Airport" > "International Airport"
+            extracted.sort(key=len, reverse=True)
+            
+            # Generate context-aware queries
+            # Combine specific locations with other extracted entities (e.g. cities) to resolve ambiguity
+            # e.g. "Hindustan Aeronautics Limited" + "Bangalore" -> "Hindustan Aeronautics Limited, Bangalore"
+            enhanced_queries = []
+            for loc in extracted:
+                # Add combinations with other hints first (highest priority)
+                for context in extracted:
+                    if context != loc and context not in loc and loc not in context:
+                        # Limit length to avoid super long invalid queries
+                        if len(loc) + len(context) < 100:
+                            enhanced_queries.append(f"{loc}, {context}")
+                
+                # Add the original location (fallback)
+                enhanced_queries.append(loc)
+            
+            # Remove duplicates while preserving order
+            final_queries = list(dict.fromkeys(enhanced_queries))
+            
             # Try to geocode
-            geocode_result = geocode_best(extracted)
+            geocode_result = geocode_best(final_queries)
             
             if geocode_result:
                 result["latitude"] = geocode_result["latitude"]
@@ -121,12 +150,50 @@ def resolve_location(post: Dict[str, Any]) -> Dict[str, Any]:
                             image_boost = 0.15
                             break
     
+    # Check for conflicts and granularity
+    conflict_detected = False
+    granularity = "poi"
+    
+    # 1. Conflict Detection (GPS vs Geocode)
+    # Using simple Haversine approx or geopy if imported
+    if gps and geocode_result:
+        from geopy.distance import geodesic
+        gps_pt = (gps["lat"], gps["lon"])
+        geo_pt = (geocode_result["latitude"], geocode_result["longitude"])
+        distance = geodesic(gps_pt, geo_pt).km
+        if distance > 50: # 50km threshold
+            conflict_detected = True
+            
+    # 2. Extract Granularity
+    if geocode_result:
+        granularity = geocode_result.get("granularity", "poi")
+        
+    # 3. Check for Scene Only
+    # Logic: If no text evidence (Caption, OCR, OR Hints), but we have a location => likely Scene inference.
+    is_scene_only = False
+    
+    # Check if we have ANY text-based evidence
+    location_hints = post.get("location_hints", [])
+    has_visual_text = bool(location_hints and len(location_hints) > 0)
+    has_text = bool(caption or ocr_text or has_visual_text)
+    
+    if not has_text and not gps and geocode_result:
+        is_scene_only = True
+        
     # Step 4: Calculate confidence score
+    # Treat visual text hints as OCR equivalent for scoring
+    effective_ocr = ocr_text
+    if not effective_ocr and has_visual_text:
+        effective_ocr = " ".join(location_hints)
+
     score_result = score_location_result(
         gps=gps,
-        ocr_text=ocr_text,
+        ocr_text=effective_ocr,
         caption=caption,
-        geocode_result=geocode_result
+        geocode_result=geocode_result,
+        conflict_detected=conflict_detected,
+        granularity=granularity,
+        is_scene_only=is_scene_only
     )
     
     # Apply image boost
@@ -134,7 +201,7 @@ def resolve_location(post: Dict[str, Any]) -> Dict[str, Any]:
     final_confidence = min(base_confidence + image_boost, 1.0)
     
     result["confidence"] = round(final_confidence, 2)
-    result["is_ambiguous"] = final_confidence < AMBIGUITY_THRESHOLD
+    result["is_ambiguous"] = score_result["is_ambiguous"]
     
     # Build method string
     methods = [score_result["method"]]
@@ -170,7 +237,8 @@ async def resolve_location_async(
     ocr_text: Optional[str],
     image_url: Optional[str] = None,
     gps: Optional[Dict[str, float]] = None,
-    extracted_locations: Optional[List[str]] = None
+    extracted_locations: Optional[List[str]] = None,
+    location_hints: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """
     Async wrapper for location resolution.
@@ -183,6 +251,7 @@ async def resolve_location_async(
         image_url: URL of image (not currently used for scene analysis)
         gps: GPS coordinates dict
         extracted_locations: Pre-extracted locations
+        location_hints: Additional location hints (e.g. from Gemini)
         
     Returns:
         Location result dict
@@ -193,6 +262,7 @@ async def resolve_location_async(
         "ocr_text": ocr_text,
         "gps": gps,
         "extracted_locations": extracted_locations or [],
+        "location_hints": location_hints or [],
         "image_path": None  # Would need to download image for scene analysis
     }
     

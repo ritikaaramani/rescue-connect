@@ -19,18 +19,22 @@ export default function PostsTable() {
         .order('created_at', { ascending: false })
 
       // Filter by status
-      if (filter === 'urgent') {
+      if (filter === 'manual_review') {
+        query = query.eq('status', 'rejected')
+      } else if (filter === 'urgent') {
         query = query.eq('status', 'urgent')
       } else if (filter === 'unprocessed') {
-        // Show posts not yet processed by AI
         query = query.eq('ai_processed', false)
+      } else if (filter === 'filtered') {
+        // Show everything EXCEPT rejected
+        query = query.neq('status', 'rejected')
       } else if (filter !== 'all') {
         query = query.eq('status', filter)
       }
 
       // Note: Flood filtering is disabled temporarily
       // When OpenAI quota is available, uncomment this to filter non-flood images:
-      // if (filter !== 'unprocessed' && filter !== 'all' && filter !== 'rejected') {
+      // if (filter !== 'unprocessed' && filter !== 'all' && filter !== 'manual_review') {
       //   query = query.or('ai_processed.eq.false,disaster_type.eq.flood,disaster_type.is.null')
       // }
 
@@ -45,7 +49,9 @@ export default function PostsTable() {
   }
 
   useEffect(() => {
-    fetchPosts()
+    // Default to 'filtered' instead of 'all'
+    if (filter === 'all') setFilter('filtered')
+    else fetchPosts()
   }, [filter])
 
   async function updateStatus(id, newStatus) {
@@ -138,16 +144,23 @@ export default function PostsTable() {
 
       {/* Filters */}
       <div className="flex gap-2 mb-4">
-        {['all', 'unprocessed', 'pending', 'urgent', 'verified', 'rejected'].map((f) => (
+        {[
+          { id: 'filtered', label: 'Filtered Reports' },
+          { id: 'urgent', label: 'Urgent' },
+          { id: 'verified', label: 'Verified' },
+          { id: 'pending', label: 'Pending' },
+          { id: 'unprocessed', label: 'Unprocessed' },
+          { id: 'manual_review', label: 'Manual Review' }
+        ].map((f) => (
           <button
-            key={f}
-            onClick={() => setFilter(f)}
-            className={`px-3 py-1 rounded text-sm capitalize ${filter === f
+            key={f.id}
+            onClick={() => setFilter(f.id)}
+            className={`px-3 py-1 rounded text-sm font-medium ${filter === f.id
               ? 'bg-blue-600 text-white'
               : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
               }`}
           >
-            {f}
+            {f.label}
           </button>
         ))}
       </div>
@@ -156,7 +169,7 @@ export default function PostsTable() {
       <div className="grid grid-cols-5 gap-4 mb-6">
         <div className="card text-center">
           <div className="text-3xl font-bold text-blue-600">{posts.length}</div>
-          <div className="text-sm text-gray-500">Total Posts</div>
+          <div className="text-sm text-gray-500">Visible Posts</div>
         </div>
         <div className="card text-center">
           <div className="text-3xl font-bold text-yellow-600">
@@ -180,7 +193,7 @@ export default function PostsTable() {
           <div className="text-3xl font-bold text-gray-600">
             {posts.filter((p) => p.status === 'rejected').length}
           </div>
-          <div className="text-sm text-gray-500">Rejected</div>
+          <div className="text-sm text-gray-500">Manual Review</div>
         </div>
       </div>
 

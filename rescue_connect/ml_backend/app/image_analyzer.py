@@ -51,7 +51,7 @@ class ImageAnalyzer:
 
     def _get_prompt(self) -> str:
         """Get the flood detection prompt."""
-        return """Analyze this image for FLOOD disaster response.
+        return """Analyze this image for DISASTER response (specifically FLOODS).
 
 You MUST respond with ONLY valid JSON (no markdown, no explanation, no code blocks):
 {
@@ -59,16 +59,40 @@ You MUST respond with ONLY valid JSON (no markdown, no explanation, no code bloc
     "disaster_type": "flood" or "none",
     "severity": "low" or "medium" or "high" or "critical",
     "description": "Brief description of what you see",
-    "detected_elements": ["water", "people", "buildings", etc],
-    "location_hints": "Any visible location indicators",
+    "detected_elements": ["element1", "element2"],
+    "location_hints": ["visually identified location name", "landmarks", "text on signs"],
     "people_affected": "none" or "few" or "many" or "crowd",
     "urgency_score": 1-10
 }
 
 IMPORTANT RULES:
-- If the image shows FLOOD (water on streets, submerged areas, people in flood water, waterlogged areas, flooded buildings): set is_disaster=true, disaster_type="flood"
-- If the image does NOT show a flood disaster (normal scenes, non-flood images, cartoons, unrelated): set is_disaster=false, disaster_type="none"
-- Only respond with the JSON object, nothing else."""
+1. **STRICT FLOOD CRITERIA**: Set is_disaster=true ONLY if you see ACTUAL UNCONTROLLED FLOODING that causes disruption or danger:
+   - Submerged infrastructure (roads completely under water, vehicles stuck).
+   - Water entering homes, shops, or buildings.
+   - People/Animals wading through knee-deep (or deeper) dirty/flood water.
+   - Rivers explicitly overflowing banks and flooding surrounding land.
+   - Rescue operations (boats on streets).
+
+2. **FALSE POSITIVES (Set is_disaster=false)**:
+   - **Recreational**: Water parks, swimming pools, beaches, lakes, boating, surfing, people playing in rain/puddles.
+   - **Weather**: Wet roads/pavement (rainy day), gray skies, small puddles, splashing cars (unless submerged).
+   - **Controlled**: Canals, dams, irrigation channels, fountains.
+   - **Context**: Movies, cartoons, memes, or screenshots unless they clearly depict a real-world disaster scenario.
+
+3. **DECISION THRESHOLD**: If the scene looks like "normal life" or "fun" or "just wet", it is NOT a disaster. Only flag if it looks "abnormal", "dangerous", or "disruptive".
+3. **LOCATION**: If you see a specific place name (e.g., on a sign like "Wonderla"), distinct landmark, or city skyline, include it in "location_hints".
+4. **VISIBLE TEXT**: transcribe any readable text on signs, billboards, or buildings into "visible_text". This is CRITICAL for identifying the location.
+5. Only respond with the JSON object, nothing else.
+
+JSON Format:
+{
+    "is_disaster": boolean,
+    "disaster_type": "string or null",
+    "severity": "critical/high/medium/low",
+    "description": "string",
+    "location_hints": ["list", "of", "strings"],
+    "visible_text": "string (all text seen in image)"
+}"""
 
     async def _analyze_with_gemini(self, image_url: str) -> dict:
         """Analyze image using Google Gemini."""
@@ -171,7 +195,8 @@ IMPORTANT RULES:
                     "severity": result.get("severity", "medium"),
                     "description": result.get("description", "Analysis complete"),
                     "detected_elements": result.get("detected_elements", []),
-                    "location_hints": result.get("location_hints", ""),
+                    "location_hints": result.get("location_hints", []) if isinstance(result.get("location_hints"), list) else [result.get("location_hints")] if result.get("location_hints") else [],
+                    "visible_text": result.get("visible_text", ""), # Captured from prompt
                     "people_affected": result.get("people_affected", "unknown"),
                     "urgency_score": int(result.get("urgency_score", 5))
                 }

@@ -8,7 +8,9 @@ export default function PostsTable() {
   const [loading, setLoading] = useState(false)
   const [processing, setProcessing] = useState({}) // Track processing state per post
   const [batchProcessing, setBatchProcessing] = useState(false)
-  const [filter, setFilter] = useState('all') // all, pending, verified, rejected, urgent, unprocessed
+  const [filter, setFilter] = useState('all')
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
 
   async function fetchPosts() {
     setLoading(true)
@@ -26,10 +28,21 @@ export default function PostsTable() {
       } else if (filter === 'unprocessed') {
         query = query.eq('ai_processed', false)
       } else if (filter === 'filtered') {
-        // Show everything EXCEPT rejected
         query = query.neq('status', 'rejected')
+      } else if (filter === 'dispatched') {
+        query = query.in('dispatch_status', ['assigned', 'in-progress'])
+      } else if (filter === 'resolved') {
+        query = query.eq('dispatch_status', 'resolved')
       } else if (filter !== 'all') {
         query = query.eq('status', filter)
+      }
+
+      // Apply date filters
+      if (startDate) {
+        query = query.gte('created_at', startDate + 'T00:00:00')
+      }
+      if (endDate) {
+        query = query.lte('created_at', endDate + 'T23:59:59')
       }
 
       // Note: Flood filtering is disabled temporarily
@@ -143,13 +156,15 @@ export default function PostsTable() {
       </div>
 
       {/* Filters */}
-      <div className="flex gap-2 mb-4">
+      <div className="flex flex-wrap gap-2 mb-4">
         {[
           { id: 'filtered', label: 'Filtered Reports' },
           { id: 'urgent', label: 'Urgent' },
           { id: 'verified', label: 'Verified' },
           { id: 'pending', label: 'Pending' },
           { id: 'unprocessed', label: 'Unprocessed' },
+          { id: 'dispatched', label: 'Dispatched' },
+          { id: 'resolved', label: 'Resolved' },
           { id: 'manual_review', label: 'Manual Review' }
         ].map((f) => (
           <button
@@ -163,6 +178,38 @@ export default function PostsTable() {
             {f.label}
           </button>
         ))}
+      </div>
+
+      {/* Date Filter */}
+      <div className="flex gap-4 mb-4 items-center bg-gray-50 p-3 rounded-lg">
+        <span className="text-sm font-medium text-gray-600">Date Filter:</span>
+        <div className="flex items-center gap-2">
+          <input
+            type="date"
+            value={startDate}
+            onChange={(e) => setStartDate(e.target.value)}
+            className="px-3 py-1 border rounded text-sm"
+          />
+          <span className="text-gray-400">to</span>
+          <input
+            type="date"
+            value={endDate}
+            onChange={(e) => setEndDate(e.target.value)}
+            className="px-3 py-1 border rounded text-sm"
+          />
+        </div>
+        <button
+          onClick={() => { setStartDate(''); setEndDate(''); }}
+          className="text-sm text-gray-500 hover:text-gray-700"
+        >
+          Clear
+        </button>
+        <button
+          onClick={fetchPosts}
+          className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+        >
+          Apply
+        </button>
       </div>
 
       {/* Stats */}
@@ -249,6 +296,17 @@ export default function PostsTable() {
               </div>
 
               <p className="mt-2 text-gray-700">{post.caption || 'No caption'}</p>
+
+              {/* Resolution Notes - show when resolved */}
+              {post.dispatch_status === 'resolved' && post.resolution_notes && (
+                <div className="mt-2 p-2 bg-green-50 rounded text-sm border border-green-200">
+                  <div className="flex items-center gap-1 text-green-700 font-medium">
+                    <CheckCircle className="w-4 h-4" />
+                    Resolution Notes
+                  </div>
+                  <p className="text-gray-700 mt-1">{post.resolution_notes}</p>
+                </div>
+              )}
 
               {/* AI Analysis Results */}
               {post.ai_processed && (

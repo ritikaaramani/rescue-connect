@@ -272,21 +272,58 @@ async def process_full_pipeline(request: ProcessPostRequest):
 
 class DispatchUpdateRequest(BaseModel):
     post_id: str
-    dispatch_status: str  # pending, dispatched, on_scene, resolved
+    dispatch_status: str  # pending, assigned, in-progress, resolved
     assigned_team: Optional[str] = None
+    resolution_notes: Optional[str] = None
 
+# Valid status transitions
+VALID_TRANSITIONS = {
+    "pending": ["assigned"],
+    "assigned": ["in-progress", "pending"],  # Allow rollback to pending
+    "in-progress": ["resolved", "assigned"],  # Allow rollback to assigned
+    "resolved": []  # Terminal state - no transitions allowed
+}
 
 @app.post("/update-dispatch")
 async def update_dispatch(request: DispatchUpdateRequest):
     try:
-        data = {
-            "dispatch_status": request.dispatch_status
-        }
+        # Fetch current status
+        result = supabase.table("posts").select("dispatch_status").eq("id", request.post_id).execute()
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Post not found")
+        
+        current_status = result.data[0].get("dispatch_status", "pending")
+        new_status = request.dispatch_status
+        
+        # Validate transition
+        if current_status != new_status:
+            allowed = VALID_TRANSITIONS.get(current_status, [])
+            if new_status not in allowed:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Invalid transition: {current_status} → {new_status}. Allowed: {allowed}"
+                )
+        
+        # Build update data
+        data = {"dispatch_status": new_status}
+        
+        # Track timestamps
+        from datetime import datetime
+        if new_status == "assigned" and current_status == "pending":
+            data["assigned_at"] = datetime.utcnow().isoformat()
+        if new_status == "resolved":
+            data["resolved_at"] = datetime.utcnow().isoformat()
+        
+        # Optional fields
         if request.assigned_team is not None:
             data["assigned_team"] = request.assigned_team
+        if request.resolution_notes is not None:
+            data["resolution_notes"] = request.resolution_notes
             
         supabase.table("posts").update(data).eq("id", request.post_id).execute()
-        return {"success": True, "post_id": request.post_id, "new_status": request.dispatch_status}
+        return {"success": True, "post_id": request.post_id, "new_status": new_status}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -15,6 +15,7 @@ from app.disaster_classifier import analyze_text, extract_entities
 from app.ocr_pipeline import extract_text_from_url
 from app.geo.geo_pipeline import resolve_location_async
 from app.geo.extractor import extract_locations
+from app.image_dedup import check_for_duplicate, compute_and_store_hash
 
 load_dotenv()
 
@@ -69,6 +70,17 @@ class ResetAIRequest(BaseModel):
     post_id: str
 
 
+class CheckDuplicateRequest(BaseModel):
+    image_url: str
+    hours_window: Optional[int] = 2
+
+
+class CheckDuplicateResponse(BaseModel):
+    is_duplicate: bool
+    existing_post: Optional[dict] = None
+    message: str
+
+
 @app.get("/")
 async def root():
     return {"message": "RescueConnect ML Backend is running", "status": "healthy"}
@@ -77,6 +89,57 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "healthy", "openai_configured": bool(analyzer.openai_key)}
+
+
+@app.post("/check-duplicate", response_model=CheckDuplicateResponse)
+async def check_duplicate(request: CheckDuplicateRequest):
+    """
+    Check if a similar image was uploaded within the specified time window.
+    Used for deduplication before creating a new post.
+    """
+    if not request.image_url:
+        raise HTTPException(status_code=400, detail="image_url is required")
+    
+    try:
+        is_dup, existing = await check_for_duplicate(
+            supabase, 
+            request.image_url, 
+            request.hours_window
+        )
+        
+        if is_dup and existing:
+            status_msg = existing.get("status", "pending")
+            location = existing.get("location", "this area")
+            disaster_type = existing.get("disaster_type", "disaster")
+            
+            if status_msg == "verified":
+                message = f"This area has already been verified for {disaster_type}. Authorities are aware."
+            elif status_msg == "dispatched":
+                message = f"Help has already been dispatched to this area for {disaster_type}."
+            elif status_msg == "urgent":
+                message = f"This area is already marked as URGENT. Authorities have been alerted."
+            else:
+                message = f"A similar report from this area is already being processed."
+            
+            return CheckDuplicateResponse(
+                is_duplicate=True,
+                existing_post=existing,
+                message=message
+            )
+        
+        return CheckDuplicateResponse(
+            is_duplicate=False,
+            existing_post=None,
+            message="No duplicate found. You can submit this report."
+        )
+    except Exception as e:
+        print(f"Error checking duplicate: {e}")
+        # On error, allow the upload to proceed
+        return CheckDuplicateResponse(
+            is_duplicate=False,
+            existing_post=None,
+            message="Could not check for duplicates. Proceeding with upload."
+        )
 
 
 @app.post("/analyze", response_model=AnalyzeResponse)
@@ -99,6 +162,7 @@ async def process_post(request: ProcessPostRequest):
     1. Fetch post from database
     2. Analyze the image
     3. Update the post with analysis results
+    4. Compute and store image hash for deduplication
     """
     try:
         # Fetch the post
@@ -110,6 +174,9 @@ async def process_post(request: ProcessPostRequest):
         
         if not post.get("image_url"):
             raise HTTPException(status_code=400, detail="Post has no image")
+        
+        # Compute and store image hash for deduplication
+        image_hash = await compute_and_store_hash(supabase, request.post_id, post["image_url"])
         
         # Analyze the image
         analysis = await analyzer.analyze_image(post["image_url"])
@@ -135,7 +202,8 @@ async def process_post(request: ProcessPostRequest):
             "people_affected": analysis["people_affected"],
             "urgency_score": analysis["urgency_score"],
             "is_disaster": analysis["is_disaster"],
-            "ai_processed": True
+            "ai_processed": True,
+            "image_hash": image_hash
         }
         
         supabase.table("posts").update(update_data).eq("id", request.post_id).execute()
@@ -437,6 +505,51 @@ async def process_all_pending():
             "results": results
         }
         
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/compute-all-hashes")
+async def compute_all_hashes():
+    """
+    Compute and store image hashes for all posts that don't have one yet.
+    This is used to backfill hashes for existing posts.
+    """
+    try:
+        # Fetch posts without image_hash
+        response = supabase.table("posts")\
+            .select("id, image_url")\
+            .is_("image_hash", "null")\
+            .not_.is_("image_url", "null")\
+            .execute()
+        
+        posts = response.data or []
+        results = []
+        
+        for post in posts:
+            try:
+                if post.get("image_url"):
+                    image_hash = await compute_and_store_hash(
+                        supabase, 
+                        post["id"], 
+                        post["image_url"]
+                    )
+                    results.append({
+                        "post_id": post["id"],
+                        "status": "success",
+                        "hash": image_hash[:20] + "..." if image_hash else "failed"
+                    })
+            except Exception as e:
+                results.append({
+                    "post_id": post["id"],
+                    "status": "failed",
+                    "error": str(e)
+                })
+        
+        return {
+            "total_processed": len(results),
+            "results": results
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -1,10 +1,47 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../supabaseClient'
-import { RefreshCw, MapPin, Clock, User, CheckCircle, XCircle, Zap, Brain, AlertTriangle, Copy } from 'lucide-react'
+import { RefreshCw, MapPin, Clock, User, CheckCircle, XCircle, Zap, Brain, AlertTriangle, Copy, X } from 'lucide-react'
 import mlApi from '../lib/mlApi'
+
+// Major Indian cities
+const INDIAN_CITIES = [
+  'Mumbai', 'Delhi', 'Bangalore', 'Hyderabad', 'Chennai', 'Kolkata', 'Pune', 'Ahmedabad',
+  'Jaipur', 'Lucknow', 'Chandigarh', 'Indore', 'Thane', 'Bhopal', 'Visakhapatnam',
+  'Pimpri-Chinchwad', 'Patna', 'Vadodara', 'Ghaziabad', 'Ludhiana', 'Agra', 'Nashik',
+  'Aurangabad', 'Dhanbad', 'Amritsar', 'Navi Mumbai', 'Ranchi', 'Howrah', 'Coimbatore',
+  'Jabalpur', 'Srinagar', 'Kochi', 'Vijaywada', 'Jodhpur', 'Madurai', 'Raipur', 'Kota',
+  'Guwahati', 'Gurgaon', 'Noida', 'Greater Noida', 'Faridabad', 'Ghaziabad', 'Varanasi',
+  'Surat', 'Nagpur', 'Indore', 'Kanpur', 'Meerut', 'Prayagraj', 'Aligarh', 'Kota',
+  'Rajkot', 'Salem', 'Thiruvananthapuram', 'Calicut', 'Mangalore', 'Mysore', 'Nashik'
+]
+
+// Quick lookup for common landmarks (for fast path filtering)
+const LANDMARKS_TO_CITY = {
+  'kempegowda international airport': 'Bangalore',
+  'kempegowda': 'Bangalore',
+  'indira gandhi international airport': 'Delhi',
+  'indira gandhi': 'Delhi',
+  'marine drive': 'Mumbai',
+  'gateway of india': 'Mumbai',
+  'taj mahal': 'Agra',
+  'hawa mahal': 'Jaipur',
+  'charminar': 'Hyderabad',
+  'victoria terminus': 'Mumbai',
+  'christ church': 'Bangalore',
+  'rajiv gandhi international airport': 'Hyderabad',
+  'meenakshi temple': 'Madurai',
+  'minakshi': 'Madurai',
+  'vidhana soudha': 'Bangalore',
+  'vidhan soudha': 'Bangalore',
+  'vidhan bhavan': 'Bangalore',
+  'bangalore palace': 'Bangalore',
+  'cubbon park': 'Bangalore',
+  'lal bagh': 'Bangalore'
+}
 
 export default function PostsTable() {
   const [posts, setPosts] = useState([])
+  const [allPosts, setAllPosts] = useState([]) // Store all posts for client-side filtering
   const [loading, setLoading] = useState(false)
   const [processing, setProcessing] = useState({}) // Track processing state per post
   const [batchProcessing, setBatchProcessing] = useState(false)
@@ -12,6 +49,72 @@ export default function PostsTable() {
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
   const [duplicateAlerts, setDuplicateAlerts] = useState({})
+  const [cityInput, setCityInput] = useState('')
+  const [citySuggestions, setCitySuggestions] = useState([])
+  const [selectedCity, setSelectedCity] = useState('')
+  const [locationCache, setLocationCache] = useState({}) // Cache for AI location lookups
+
+  // Smart location check using AI - checks if a location belongs to a city
+  const checkLocationBelongsToCity = async (location, city) => {
+    if (!location || !city) return false
+    
+    // Create cache key
+    const cacheKey = `${location.toLowerCase()}|${city.toLowerCase()}`
+    
+    // Check cache first
+    if (locationCache[cacheKey] !== undefined) {
+      return locationCache[cacheKey]
+    }
+
+    try {
+      // Check if API key is available
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY
+      if (!apiKey) {
+        console.warn('Gemini API key not configured, skipping AI location check')
+        setLocationCache(prev => ({ ...prev, [cacheKey]: false }))
+        return false
+      }
+
+      // Use the Gemini API to intelligently check if location belongs to city
+      const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + apiKey, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{
+              text: `Is the location or landmark "${location}" located in or near the city of "${city}" in India? Answer with only "yes" or "no".`
+            }]
+          }],
+          generationConfig: {
+            maxOutputTokens: 10,
+            temperature: 0
+          }
+        })
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.warn('Gemini API error:', response.status, errorText)
+        setLocationCache(prev => ({ ...prev, [cacheKey]: false }))
+        return false
+      }
+
+      const data = await response.json()
+      const answer = data?.candidates?.[0]?.content?.parts?.[0]?.text?.toLowerCase() || 'no'
+      const result = answer.includes('yes')
+      
+      // Cache the result
+      setLocationCache(prev => ({ ...prev, [cacheKey]: result }))
+      
+      return result
+    } catch (error) {
+      console.warn('Error checking location with AI:', error)
+      setLocationCache(prev => ({ ...prev, [cacheKey]: false }))
+      return false
+    }
+  }
 
   async function fetchPosts() {
     setLoading(true)
@@ -54,12 +157,150 @@ export default function PostsTable() {
 
       const { data, error } = await query
       if (error) throw error
-      setPosts(data ?? [])
+      const postsData = data ?? []
+      setAllPosts(postsData)
+      
+      // Apply all filters to the fetched data
+      if (selectedCity || startDate || endDate) {
+        await applyAllFilters(postsData, selectedCity, startDate, endDate)
+      } else {
+        setPosts(postsData)
+      }
     } catch (err) {
       console.error('Error fetching posts', err)
     } finally {
       setLoading(false)
     }
+  }
+
+  // Apply all filters together
+  async function applyAllFilters(dataToFilter, city, startD, endD) {
+    try {
+      let filtered = dataToFilter || []
+
+      // Apply city filter
+      if (city && city.length > 0) {
+        const cityLower = city.toLowerCase()
+        filtered = await Promise.all(filtered.map(async (post) => {
+          if (!post) return null
+          
+          const location = (post.location || '').toLowerCase()
+          
+          // Handle extracted_locations - ensure it's an array
+          const extractedLocsArray = Array.isArray(post.extracted_locations) ? post.extracted_locations : []
+          const extractedLocs = extractedLocsArray.map(l => (l || '').toLowerCase()).join(' ')
+          
+          // Handle location_hints - could be string or array
+          let locationHints = ''
+          if (Array.isArray(post.location_hints)) {
+            locationHints = post.location_hints.map(l => (l || '').toLowerCase()).join(' ')
+          } else if (typeof post.location_hints === 'string') {
+            locationHints = post.location_hints.toLowerCase()
+          }
+          
+          const caption = (post.caption || '').toLowerCase()
+          const ocrText = (post.ocr_text || '').toLowerCase()
+          
+          const allText = `${location} ${extractedLocs} ${locationHints} ${caption} ${ocrText}`
+          
+          // Direct city match
+          if (allText.includes(cityLower)) {
+            return post
+          }
+          
+          // Check for hardcoded landmarks first (fast path)
+          for (const [landmark, landmarkCity] of Object.entries(LANDMARKS_TO_CITY)) {
+            if (landmarkCity.toLowerCase() === cityLower && allText.includes(landmark)) {
+              return post
+            }
+          }
+          
+          // Smart AI check for any location that might belong to this city
+          // Extract potential locations (words capitalized or common landmark patterns)
+          const potentialLocations = [location, ...extractedLocsArray, locationHints]
+            .filter(l => l && l.trim().length > 0 && l.trim().split(' ').length <= 4)
+          
+          for (const potentialLocation of potentialLocations) {
+            if (potentialLocation && potentialLocation.trim()) {
+              const belongs = await checkLocationBelongsToCity(potentialLocation.trim(), city)
+              if (belongs) {
+                return post
+              }
+            }
+          }
+          
+          return null
+        }))
+        
+        filtered = filtered.filter(p => p !== null)
+      }
+
+      // Apply date filters
+      if (startD) {
+        try {
+          const startDateObj = new Date(startD + 'T00:00:00')
+          filtered = filtered.filter(p => p && new Date(p.created_at) >= startDateObj)
+        } catch (e) {
+          console.error('Start date filter error:', e)
+        }
+      }
+      if (endD) {
+        try {
+          const endDateObj = new Date(endD + 'T23:59:59')
+          filtered = filtered.filter(p => p && new Date(p.created_at) <= endDateObj)
+        } catch (e) {
+          console.error('End date filter error:', e)
+        }
+      }
+
+      setPosts(filtered)
+    } catch (err) {
+      console.error('Error applying filters:', err)
+      setPosts(dataToFilter || [])
+    }
+  }
+
+  // Handle city input and show suggestions
+  function handleCityInput(value) {
+    setCityInput(value)
+    
+    if (value.length === 0) {
+      setCitySuggestions([])
+      return
+    }
+
+    const lowercase = value.toLowerCase()
+    const suggestions = INDIAN_CITIES.filter(city =>
+      city.toLowerCase().startsWith(lowercase)
+    ).slice(0, 8) // Show max 8 suggestions
+
+    setCitySuggestions(suggestions)
+  }
+
+  // Select a city from suggestions
+  async function selectCity(city) {
+    setCityInput('')
+    setCitySuggestions([])
+    setSelectedCity(city)
+    // Apply filter immediately with current data
+    const dataToFilter = allPosts && allPosts.length > 0 ? allPosts : posts
+    await applyAllFilters(dataToFilter, city, startDate, endDate)
+  }
+
+  // Clear city filter
+  async function clearCityFilter() {
+    setSelectedCity('')
+    setCityInput('')
+    setCitySuggestions([])
+    await applyAllFilters(allPosts && allPosts.length > 0 ? allPosts : posts, '', startDate, endDate)
+  }
+
+  // Apply city filter button handler
+  async function handleApplyCityFilter() {
+    console.log('Apply filter clicked. selectedCity:', selectedCity, 'allPosts length:', allPosts.length, 'posts length:', posts.length)
+    const dataToFilter = allPosts && allPosts.length > 0 ? allPosts : posts
+    console.log('Data to filter:', dataToFilter.length)
+    await applyAllFilters(dataToFilter, selectedCity, startDate, endDate)
   }
 
   useEffect(() => {
@@ -70,6 +311,15 @@ export default function PostsTable() {
     // Initial fetch when component mounts
     fetchPosts()
   }, [])
+
+  useEffect(() => {
+    // Re-apply filters when date or city changes
+    const applyFilters = async () => {
+      const dataToFilter = allPosts && allPosts.length > 0 ? allPosts : posts
+      await applyAllFilters(dataToFilter, selectedCity, startDate, endDate)
+    }
+    applyFilters()
+  }, [selectedCity, startDate, endDate])
 
   async function updateStatus(id, newStatus) {
     try {
@@ -227,12 +477,73 @@ export default function PostsTable() {
         >
           Clear
         </button>
-        <button
-          onClick={fetchPosts}
-          className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
-        >
-          Apply
-        </button>
+      </div>
+
+      {/* City Filter */}
+      <div className="flex gap-4 mb-4 items-center bg-blue-50 p-3 rounded-lg flex-wrap">
+        <span className="text-sm font-medium text-gray-600">City Filter:</span>
+        <div className="relative flex-1 min-w-xs">
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              placeholder="Search Indian cities..."
+              value={cityInput}
+              onChange={(e) => handleCityInput(e.target.value)}
+              onFocus={(e) => {
+                if (e.target.value.length > 0) {
+                  handleCityInput(e.target.value)
+                }
+              }}
+              className="w-full px-3 py-1 border rounded text-sm"
+            />
+            {citySuggestions.length === 0 && selectedCity && (
+              <button
+                onClick={clearCityFilter}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+          
+          {/* Autocomplete suggestions */}
+          {citySuggestions.length > 0 && (
+            <div className="absolute top-full left-0 right-0 mt-1 bg-white border rounded shadow-lg z-10">
+              {citySuggestions.map((city) => (
+                <button
+                  key={city}
+                  onClick={() => selectCity(city)}
+                  className="w-full text-left px-3 py-2 hover:bg-blue-100 text-sm border-b last:border-b-0"
+                >
+                  <MapPin className="w-3 h-3 inline mr-2 text-blue-600" />
+                  {city}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        
+        {selectedCity && (
+          <>
+            <div className="text-sm">
+              <span className="bg-blue-200 text-blue-800 px-2 py-1 rounded">
+                {selectedCity}
+              </span>
+            </div>
+            <button
+              onClick={handleApplyCityFilter}
+              className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+            >
+              Apply Filter
+            </button>
+            <button
+              onClick={clearCityFilter}
+              className="px-3 py-1 bg-gray-300 text-gray-700 rounded text-sm hover:bg-gray-400"
+            >
+              Clear
+            </button>
+          </>
+        )}
       </div>
 
       {/* Stats */}

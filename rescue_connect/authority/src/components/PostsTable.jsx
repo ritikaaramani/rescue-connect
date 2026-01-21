@@ -11,6 +11,7 @@ export default function PostsTable() {
   const [filter, setFilter] = useState('all')
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
+  const [duplicateAlerts, setDuplicateAlerts] = useState({})
 
   async function fetchPosts() {
     setLoading(true)
@@ -62,10 +63,13 @@ export default function PostsTable() {
   }
 
   useEffect(() => {
-    // Default to 'filtered' instead of 'all'
-    if (filter === 'all') setFilter('filtered')
-    else fetchPosts()
+    fetchPosts()
   }, [filter])
+
+  useEffect(() => {
+    // Initial fetch when component mounts
+    fetchPosts()
+  }, [])
 
   async function updateStatus(id, newStatus) {
     try {
@@ -176,6 +180,7 @@ export default function PostsTable() {
       {/* Filters */}
       <div className="flex flex-wrap gap-2 mb-4">
         {[
+          { id: 'all', label: 'All Reports' },
           { id: 'filtered', label: 'Filtered Reports' },
           { id: 'urgent', label: 'Urgent' },
           { id: 'verified', label: 'Verified' },

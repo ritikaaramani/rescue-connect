@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../supabaseClient'
-import { RefreshCw, MapPin, Clock, User, CheckCircle, XCircle, Zap, Brain, AlertTriangle } from 'lucide-react'
+import { RefreshCw, MapPin, Clock, User, CheckCircle, XCircle, Zap, Brain, AlertTriangle, Copy } from 'lucide-react'
 import mlApi from '../lib/mlApi'
 
 export default function PostsTable() {
@@ -9,6 +9,7 @@ export default function PostsTable() {
   const [processing, setProcessing] = useState({}) // Track processing state per post
   const [batchProcessing, setBatchProcessing] = useState(false)
   const [filter, setFilter] = useState('all') // all, pending, verified, rejected, urgent, unprocessed
+  const [duplicateAlerts, setDuplicateAlerts] = useState({}) // Track duplicate detection per post
 
   async function fetchPosts() {
     setLoading(true)
@@ -65,9 +66,27 @@ export default function PostsTable() {
     }
   }
 
-  async function processWithAI(postId) {
+  async function processWithAI(postId, imageUrl, skipDupCheck = false) {
     setProcessing(prev => ({ ...prev, [postId]: true }))
+    setDuplicateAlerts(prev => ({ ...prev, [postId]: null }))
     try {
+      // Check for duplicates first (unless skipped)
+      if (!skipDupCheck && imageUrl) {
+        const dupCheck = await mlApi.checkDuplicate(imageUrl, 2)
+        if (dupCheck.is_duplicate && dupCheck.existing_post) {
+          setDuplicateAlerts(prev => ({
+            ...prev,
+            [postId]: {
+              message: dupCheck.message,
+              existingPost: dupCheck.existing_post,
+              processType: 'ai' // Track which button was clicked
+            }
+          }))
+          setProcessing(prev => ({ ...prev, [postId]: false }))
+          return
+        }
+      }
+      
       const result = await mlApi.processPost(postId)
       console.log('AI Processing result:', result)
       fetchPosts() // Refresh to show updated data
@@ -208,21 +227,30 @@ export default function PostsTable() {
       <div className="grid gap-4">
         {posts.map((post) => (
           <div key={post.id} className={`card flex gap-4 ${post.status === 'urgent' ? 'border-2 border-red-500' : ''}`}>
-            {/* Image */}
+            {/* Media (Image or Video) */}
             {post.image_url && (
               <div className="flex-shrink-0">
-                <img
-                  src={post.image_url}
-                  alt="Report"
-                  className="w-32 h-32 object-cover rounded"
-                />
+                {post.media_type === 'video' ? (
+                  <video
+                    src={post.image_url}
+                    className="w-32 h-32 object-cover rounded"
+                    controls
+                    muted
+                  />
+                ) : (
+                  <img
+                    src={post.image_url}
+                    alt="Report"
+                    className="w-32 h-32 object-cover rounded"
+                  />
+                )}
               </div>
             )}
 
             {/* Content */}
             <div className="flex-1">
               <div className="flex items-start justify-between">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className={`badge ${getBadgeClass(post.status)}`}>
                     {post.status}
                   </span>
@@ -239,6 +267,11 @@ export default function PostsTable() {
                   {post.urgency_score > 0 && (
                     <span className="text-xs bg-gray-100 px-2 py-0.5 rounded">
                       Urgency: {post.urgency_score}/10
+                    </span>
+                  )}
+                  {post.image_hash && (
+                    <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded" title="Image fingerprinted for deduplication">
+                      🔍 Fingerprinted
                     </span>
                   )}
                 </div>
@@ -319,17 +352,36 @@ export default function PostsTable() {
                 {!post.ai_processed && (
                   <>
                     <button
-                      onClick={() => processWithAI(post.id)}
+                      onClick={() => processWithAI(post.id, post.image_url)}
                       disabled={processing[post.id]}
                       className="px-3 py-1 bg-purple-600 text-white rounded text-sm flex items-center gap-1 hover:bg-purple-700 disabled:opacity-60"
                     >
                       <Zap className={`w-4 h-4 ${processing[post.id] ? 'animate-pulse' : ''}`} />
-                      {processing[post.id] ? 'Analyzing...' : 'AI Analyze'}
+                      {processing[post.id] ? 'Checking...' : 'AI Analyze'}
                     </button>
                     <button
                       onClick={async () => {
                         setProcessing(prev => ({ ...prev, [post.id]: true }))
+                        setDuplicateAlerts(prev => ({ ...prev, [post.id]: null }))
                         try {
+                          // First check for duplicates
+                          if (post.image_url) {
+                            const dupCheck = await mlApi.checkDuplicate(post.image_url, 2)
+                            if (dupCheck.is_duplicate && dupCheck.existing_post) {
+                              // Found a duplicate - show alert instead of processing
+                              setDuplicateAlerts(prev => ({
+                                ...prev,
+                                [post.id]: {
+                                  message: dupCheck.message,
+                                  existingPost: dupCheck.existing_post,
+                                  processType: 'full' // Track which button was clicked
+                                }
+                              }))
+                              setProcessing(prev => ({ ...prev, [post.id]: false }))
+                              return
+                            }
+                          }
+                          // No duplicate found, proceed with processing
                           await mlApi.processPostFull(post.id)
                           fetchPosts()
                         } catch (err) {
@@ -341,9 +393,59 @@ export default function PostsTable() {
                       className="px-3 py-1 bg-green-600 text-white rounded text-sm flex items-center gap-1 hover:bg-green-700 disabled:opacity-60"
                     >
                       <MapPin className={`w-4 h-4 ${processing[post.id] ? 'animate-pulse' : ''}`} />
-                      {processing[post.id] ? 'Processing...' : 'Full AI + Geo'}
+                      {processing[post.id] ? 'Checking...' : 'Full AI + Geo'}
                     </button>
                   </>
+                )}
+
+                {/* Duplicate Alert Display */}
+                {duplicateAlerts[post.id] && (
+                  <div className="w-full mt-2 p-3 bg-yellow-50 border border-yellow-300 rounded-lg">
+                    <div className="flex items-start gap-2">
+                      <Copy className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
+                      <div className="flex-1">
+                        <p className="font-semibold text-yellow-800">Area Already Reported</p>
+                        <p className="text-sm text-yellow-700">{duplicateAlerts[post.id].message}</p>
+                        {duplicateAlerts[post.id].existingPost && (
+                          <div className="mt-2 text-xs text-yellow-600">
+                            <p>Original Status: <strong>{duplicateAlerts[post.id].existingPost.status}</strong></p>
+                            {duplicateAlerts[post.id].existingPost.disaster_type && (
+                              <p>Type: {duplicateAlerts[post.id].existingPost.disaster_type}</p>
+                            )}
+                          </div>
+                        )}
+                        <div className="mt-2 flex gap-2">
+                          <button
+                            onClick={() => setDuplicateAlerts(prev => ({ ...prev, [post.id]: null }))}
+                            className="text-xs px-2 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
+                          >
+                            Dismiss
+                          </button>
+                          <button
+                            onClick={async () => {
+                              const processType = duplicateAlerts[post.id]?.processType
+                              setDuplicateAlerts(prev => ({ ...prev, [post.id]: null }))
+                              setProcessing(prev => ({ ...prev, [post.id]: true }))
+                              try {
+                                if (processType === 'ai') {
+                                  await mlApi.processPost(post.id)
+                                } else {
+                                  await mlApi.processPostFull(post.id)
+                                }
+                                fetchPosts()
+                              } catch (err) {
+                                alert('Processing failed: ' + err.message)
+                              }
+                              setProcessing(prev => ({ ...prev, [post.id]: false }))
+                            }}
+                            className="text-xs px-2 py-1 bg-orange-500 text-white rounded hover:bg-orange-600"
+                          >
+                            Process Anyway
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 )}
 
                 {post.status !== 'verified' && (

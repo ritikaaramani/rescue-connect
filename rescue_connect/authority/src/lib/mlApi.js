@@ -103,6 +103,25 @@ export const mlApi = {
   },
 
   /**
+   * Check for duplicate images before processing
+   */
+  async checkDuplicate(imageUrl, hoursWindow = 2) {
+    const res = await fetch(`${ML_BACKEND_URL}/check-duplicate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        image_url: imageUrl,
+        hours_window: hoursWindow
+      })
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.detail || 'Duplicate check failed')
+    }
+    return res.json()
+  },
+
+  /**
    * Update dispatch status and assigned team
    */
   async updateDispatch(postId, dispatchStatus, assignedTeam) {

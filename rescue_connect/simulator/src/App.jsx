@@ -101,25 +101,26 @@ export default function App() {
     <div className="min-h-screen bg-black text-white">
       {/* Top Header */}
       <header className="fixed top-0 left-0 right-0 bg-black border-b border-gray-800 z-50">
-        <div className="max-w-lg mx-auto px-4 h-14 flex items-center justify-between">
-          <h1 className="text-xl font-bold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
+        <div className="max-w-lg mx-auto px-3 h-14 flex items-center justify-between">
+          <h1 className="text-lg sm:text-xl font-bold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
             RescueConnect
           </h1>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 sm:gap-4">
             {profile && (
-              <span className="text-sm text-gray-400">@{profile.username}</span>
+              <span className="text-xs sm:text-sm text-gray-400 max-w-[80px] sm:max-w-none truncate">@{profile.username}</span>
             )}
             <button 
               onClick={() => setActiveTab('notifications')}
-              className={`p-2 rounded-full transition-colors ${activeTab === 'notifications' ? 'text-white' : 'text-gray-400 hover:text-white'}`}
+              className={`p-1.5 sm:p-2 rounded-full transition-colors ${activeTab === 'notifications' ? 'text-white' : 'text-gray-400 hover:text-white'}`}
             >
-              <Heart className="w-6 h-6" />
+              <Heart className="w-5 h-5 sm:w-6 sm:h-6" />
             </button>
             <button 
               onClick={signOut}
-              className="p-2 text-gray-400 hover:text-red-500 transition-colors"
+              className="p-1.5 sm:p-2 text-gray-400 hover:text-red-500 transition-colors"
+              title="Sign Out"
             >
-              <LogOut className="w-5 h-5" />
+              <LogOut className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
           </div>
         </div>

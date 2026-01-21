@@ -298,21 +298,21 @@ export default function CreatePost({ user, profile, onPosted, onClose }) {
         </div>
 
         {/* Location */}
-        <div className="flex items-center gap-3 bg-gray-800 rounded-xl p-4">
+        <div className="flex items-center gap-2 sm:gap-3 bg-gray-800 rounded-xl p-3 sm:p-4">
           <MapPin className="w-5 h-5 text-red-500 flex-shrink-0" />
           <input
             type="text"
-            placeholder="Add location (tap icon to auto-detect)"
+            placeholder="Location (optional)"
             value={location}
             onChange={(e) => setLocation(e.target.value)}
-            className="flex-1 bg-transparent text-white placeholder-gray-500 focus:outline-none"
+            className="flex-1 min-w-0 bg-transparent text-white placeholder-gray-500 focus:outline-none text-sm sm:text-base"
           />
           <button
             type="button"
             onClick={handleGetLocation}
-            className="text-blue-500 text-sm font-medium hover:text-blue-400"
+            className="text-blue-500 text-xs sm:text-sm font-medium hover:text-blue-400 flex-shrink-0 px-2 py-1 bg-blue-500/10 rounded-lg"
           >
-            Detect
+            📍 Detect
           </button>
         </div>
 

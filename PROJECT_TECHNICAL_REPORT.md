@@ -184,7 +184,7 @@ RescueConnect is an intelligent disaster response platform that analyzes social 
 
 **Supported Providers:**
 1. **Google Gemini** (Primary - Free)
-   - Models: `gemini-2.0-flash-exp`, `gemini-1.5-pro`, `gemini-pro-vision`
+   - Models: `gemini-2.0-flash`, `gemini-1.5-flash`, `gemini-1.5-pro`
    - Free tier available at https://aistudio.google.com
    - Automatic model fallback if primary model fails
 

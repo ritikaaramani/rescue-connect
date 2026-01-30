@@ -29,7 +29,7 @@ Simulator (Users) → ML Backend (Analysis) → Database → Authority Dashboard
 
 ### 1. **Vision/Image Analysis**
 - **Google Gemini API** (Primary)
-  - Models: gemini-2.0-flash-exp, gemini-1.5-pro
+  - Models: gemini-2.0-flash, gemini-1.5-flash, gemini-1.5-pro
   - Detects: flood, fire, earthquake, collapse, explosion
   - Extracts: location hints, visible text, people affected
 - **OpenAI GPT-4 Vision** (Fallback)

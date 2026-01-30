@@ -96,32 +96,37 @@ JSON Format:
 
     async def _analyze_with_gemini(self, image_url: str) -> dict:
         """Analyze image using Google Gemini."""
-        import google.generativeai as genai
+        # Use the new google-genai package (google.generativeai is deprecated)
+        from google import genai
+        from google.genai import types
         
-        genai.configure(api_key=self.gemini_key)
+        client = genai.Client(api_key=self.gemini_key)
         
         # Try different models in order of preference
-        models_to_try = ['gemini-2.0-flash-exp', 'gemini-1.5-pro', 'gemini-pro-vision']
+        # Updated: use current stable models that support vision
+        models_to_try = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']
         last_error = None
         
         for model_name in models_to_try:
             try:
                 print(f"🔍 Trying model: {model_name}")
-                model = genai.GenerativeModel(model_name)
                 
                 # Download image
-                async with httpx.AsyncClient() as client:
-                    response = await client.get(image_url)
+                async with httpx.AsyncClient() as http_client:
+                    response = await http_client.get(image_url)
                     image_data = response.content
                 
-                # Create image part for Gemini
-                image_part = {
-                    "mime_type": "image/jpeg",
-                    "data": image_data
-                }
+                # Create image part for Gemini using new SDK
+                image_part = types.Part.from_bytes(
+                    data=image_data,
+                    mime_type="image/jpeg"
+                )
                 
-                # Generate response
-                response = model.generate_content([self._get_prompt(), image_part])
+                # Generate response using the new SDK
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[self._get_prompt(), image_part]
+                )
                 content = response.text
                 
                 print(f"📝 Gemini response: {content[:200]}...")

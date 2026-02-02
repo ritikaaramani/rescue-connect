@@ -44,6 +44,7 @@ export default function PostsTable({ onViewOnMap }) {
   const [allPosts, setAllPosts] = useState([]) // Store all posts for client-side filtering
   const [loading, setLoading] = useState(false)
   const [processing, setProcessing] = useState({}) // Track processing state per post
+  const [processingType, setProcessingType] = useState({}) // Track which type of processing (ai or full)
   const [batchProcessing, setBatchProcessing] = useState(false)
   const [filter, setFilter] = useState('all')
   const [startDate, setStartDate] = useState('')
@@ -54,6 +55,7 @@ export default function PostsTable({ onViewOnMap }) {
   const [selectedCity, setSelectedCity] = useState('')
   const [locationCache, setLocationCache] = useState({}) // Cache for AI location lookups
   const [profiles, setProfiles] = useState({}) // Cache for user profiles
+  const [showMLNotice, setShowMLNotice] = useState(true) // Show ML backend notice on first load
 
   // Smart location check using AI - checks if a location belongs to a city
   const checkLocationBelongsToCity = async (location, city) => {
@@ -418,6 +420,32 @@ export default function PostsTable({ onViewOnMap }) {
 
   return (
     <div>
+      {/* ML Backend Notice Dialog */}
+      {showMLNotice && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md mx-4 p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
+                <AlertTriangle className="w-6 h-6 text-blue-600" />
+              </div>
+              <h3 className="text-lg font-bold text-gray-900">ML Backend Notice</h3>
+            </div>
+            <p className="text-gray-600 mb-4">
+              The ML backend on Google Cloud Run may take some time to connect with the frontend on first load.
+            </p>
+            <p className="text-gray-600 mb-6">
+              <strong>Please try 2-3 times</strong> if the AI analysis doesn't respond immediately. The service needs to "wake up" after being idle.
+            </p>
+            <button
+              onClick={() => setShowMLNotice(false)}
+              className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+            >
+              Got it!
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold">Disaster Reports</h1>
@@ -742,16 +770,20 @@ export default function PostsTable({ onViewOnMap }) {
                 {!post.ai_processed && (
                   <>
                     <button
-                      onClick={() => processWithAI(post.id, post.image_url)}
+                      onClick={() => {
+                        setProcessingType(prev => ({ ...prev, [post.id]: 'ai' }))
+                        processWithAI(post.id, post.image_url)
+                      }}
                       disabled={processing[post.id]}
                       className="px-3 py-1 bg-purple-600 text-white rounded text-sm flex items-center gap-1 hover:bg-purple-700 disabled:opacity-60"
                     >
                       <Zap className={`w-4 h-4 ${processing[post.id] ? 'animate-pulse' : ''}`} />
-                      {processing[post.id] ? 'Checking...' : 'AI Analyze'}
+                      {processing[post.id] && processingType[post.id] === 'ai' ? 'Analyzing...' : 'AI Analyze'}
                     </button>
                     <button
                       onClick={async () => {
                         setProcessing(prev => ({ ...prev, [post.id]: true }))
+                        setProcessingType(prev => ({ ...prev, [post.id]: 'full' }))
                         setDuplicateAlerts(prev => ({ ...prev, [post.id]: null }))
                         try {
                           // First check for duplicates
@@ -782,16 +814,21 @@ export default function PostsTable({ onViewOnMap }) {
                       disabled={processing[post.id]}
                       className="px-3 py-1 bg-green-600 text-white rounded text-sm flex items-center gap-1 hover:bg-green-700 disabled:opacity-60"
                     >
-                      <MapPin className={`w-4 h-4 ${processing[post.id] ? 'animate-spin' : ''}`} />
-                      {processing[post.id] ? 'Processing...' : 'Full AI + Geo'}
+                      <MapPin className={`w-4 h-4 ${processing[post.id] && processingType[post.id] === 'full' ? 'animate-spin' : ''}`} />
+                      {processing[post.id] && processingType[post.id] === 'full' ? 'Processing...' : 'Full AI + Geo'}
                     </button>
-                    {processing[post.id] && (
-                      <div className="w-full mt-2 p-2 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700 flex items-center gap-2">
-                        <div className="animate-spin w-4 h-4 border-2 border-green-600 border-t-transparent rounded-full"></div>
-                        <span>This may take up to 2 minutes. Please wait while AI analyzes the image and extracts location...</span>
-                      </div>
-                    )}
                   </>
+                )}
+                
+                {/* Processing Notice - shows below buttons when Full AI + Geo is running */}
+                {processing[post.id] && processingType[post.id] === 'full' && (
+                  <div className="w-full mt-2 p-3 bg-green-50 border border-green-200 rounded-lg">
+                    <div className="flex items-center gap-2 text-green-700">
+                      <div className="animate-spin w-4 h-4 border-2 border-green-600 border-t-transparent rounded-full"></div>
+                      <span className="text-sm font-medium">Processing with AI + Geo...</span>
+                    </div>
+                    <p className="text-sm text-green-600 mt-1">⏱️ This may take up to 2 minutes. Please wait while AI analyzes the image and extracts location.</p>
+                  </div>
                 )}
 
                 {/* Duplicate Alert Display */}

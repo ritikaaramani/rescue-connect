@@ -782,9 +782,15 @@ export default function PostsTable({ onViewOnMap }) {
                       disabled={processing[post.id]}
                       className="px-3 py-1 bg-green-600 text-white rounded text-sm flex items-center gap-1 hover:bg-green-700 disabled:opacity-60"
                     >
-                      <MapPin className={`w-4 h-4 ${processing[post.id] ? 'animate-pulse' : ''}`} />
-                      {processing[post.id] ? 'Checking...' : 'Full AI + Geo'}
+                      <MapPin className={`w-4 h-4 ${processing[post.id] ? 'animate-spin' : ''}`} />
+                      {processing[post.id] ? 'Processing...' : 'Full AI + Geo'}
                     </button>
+                    {processing[post.id] && (
+                      <div className="w-full mt-2 p-2 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700 flex items-center gap-2">
+                        <div className="animate-spin w-4 h-4 border-2 border-green-600 border-t-transparent rounded-full"></div>
+                        <span>This may take up to 2 minutes. Please wait while AI analyzes the image and extracts location...</span>
+                      </div>
+                    )}
                   </>
                 )}
 

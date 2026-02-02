@@ -1,3 +1,5 @@
+// PostsTable Component - Disaster Reports Management
+// Updated: Feb 2026 - Added ML backend notice dialog and processing indicators
 import { useEffect, useState } from 'react'
 import { supabase } from '../supabaseClient'
 import { RefreshCw, MapPin, Clock, User, CheckCircle, XCircle, Zap, Brain, AlertTriangle, Copy, X, Navigation } from 'lucide-react'
